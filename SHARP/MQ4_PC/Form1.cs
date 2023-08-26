@@ -25,6 +25,7 @@ namespace MQ4_PC
         static object syncLock = new object();
         bool connected = false;
         bool calibration = true;
+        bool useport = false;
         Thread oThread;
         DataGridView dgv;
         int time = 0;
@@ -59,10 +60,13 @@ namespace MQ4_PC
             }
 
             this.Closing += (o, e) => {
-                if (myPort.IsOpen)
+                if (useport)
                 {
-                    myPort.WriteLine("0;0;0");
-                    myPort.Close();
+                    if (myPort.IsOpen)
+                    {
+                        myPort.WriteLine("0;0;0");
+                        myPort.Close();
+                    }
                 }
                 oThread.Abort();
             };
@@ -94,7 +98,7 @@ namespace MQ4_PC
 
         private void Form1_Load(object sender, EventArgs e)
         {
-            Load_Ports();
+            if (useport) Load_Ports();
             Load_Sample();
         }
 
@@ -114,8 +118,12 @@ namespace MQ4_PC
                 lock (syncLock) { 
                     if (connected == false && myPort.IsOpen == false)
                     {
-                        myPort = new SerialPort(CB_port.SelectedItem.ToString(), 9600);
-                        myPort.Open();
+                        if (useport)
+                        {
+                            myPort = new SerialPort(CB_port.SelectedItem.ToString(), 9600);
+                            myPort.Open();
+                        }
+                       
                         Opened();
                         B_connect_port.Text = "Close";
                         B_Start.Text = "Start";
@@ -124,9 +132,13 @@ namespace MQ4_PC
                     else if (connected == true && myPort.IsOpen == true)
                     {
                         reading = false;
-                        myPort.WriteLine("0;0;0");
-                        Thread.Sleep(100);
-                        myPort.Close();
+                        if (useport)
+                        {
+                            myPort.WriteLine("0;0;0");
+                            Thread.Sleep(100);
+                            myPort.Close();
+                        }
+                        
                         Closes();
                         B_connect_port.Text = "Open";
                         connected = false;
@@ -149,11 +161,14 @@ namespace MQ4_PC
             {
                 G_Calibration.Enabled = false;
                 G_Sample.Enabled = false;
-                myPort.Write(Config.Sample_count+";"+Config.Sample_time+";1");
-                int bit = Convert.ToInt32(myPort.ReadLine());
-                bit /= Config.Sample_count;
-                _mq4.Set_Calibration(bit);
-                Calibration_View();
+                if (useport)
+                {
+                    myPort.Write(Config.Sample_count + ";" + Config.Sample_time + ";1");
+                    int bit = Convert.ToInt32(myPort.ReadLine());
+                    bit /= Config.Sample_count;
+                    _mq4.Set_Calibration(bit);
+                    Calibration_View();
+                }
                 calibration = false;
                 G_Sample.Enabled = true;
             }
@@ -203,7 +218,8 @@ namespace MQ4_PC
                 {
                     if (reading)
                     {
-                        myPort.WriteLine("0;0;0");
+                        reading = false;
+                        if(useport) myPort.WriteLine("0;0;0");
                         B_Start.Text = "Start";
                         G_Sample.Enabled = true;
                         G_Export.Enabled = true;
@@ -211,7 +227,7 @@ namespace MQ4_PC
                     else
                     {
                         reading = true;
-                        myPort.WriteLine(Config.Sample_count + ";" + Config.Sample_time+";0");
+                        if(useport) myPort.WriteLine(Config.Sample_count + ";" + Config.Sample_time+";0");
                         B_Start.Text = "Stop";
                         G_Sample.Enabled = false;
                         G_Export.Enabled = false;
@@ -235,6 +251,12 @@ namespace MQ4_PC
             L_value.Text = "0";
         }
 
+        private double Random_number()
+        {
+            double rd = rand.Next(1000, 5000) * rand.Next(23, 30);
+            return rd;
+        }
+
         public void Read()
         {
             double ppm = 0;
@@ -246,35 +268,47 @@ namespace MQ4_PC
                 {
                     try
                     {
-                        if (myPort.IsOpen)
+                        if (useport)
                         {
-                            if (!calibration)
+                            if (myPort.IsOpen)
                             {
-                                lock (syncLock)
+                                if (!calibration)
                                 {
-                                    data = Convert.ToInt32(myPort.ReadLine());
-                                }
-                                if (data == -1)
-                                {
-                                    reading = false;
-                                    data = 0;
+                                    lock (syncLock)
+                                    {
+                                        data = Convert.ToInt32(myPort.ReadLine());
+                                    }
+                                    if (data == -1)
+                                    {
+                                        reading = false;
+                                        data = 0;
+                                    }
+                                    else
+                                    {
+                                        data /= Config.Sample_count;
+                                        ppm = _mq4.PPM(data);
+                                        ppm = Math.Round(ppm, 3);
+                                        _chartslive.Read(ppm);
+                                        dgv.Rows.Add(time, ppm);
+                                        Write_Textbox(ppm.ToString());
+                                        time += Config.Sample_delay;
+                                    }
                                 }
                                 else
                                 {
-                                    data /= Config.Sample_count;
-                                    ppm = _mq4.PPM(data);
-                                    ppm = Math.Round(ppm, 3);
-                                    _chartslive.Read(ppm);
-                                    dgv.Rows.Add(time, ppm);
-                                    Write_Textbox(ppm.ToString());
-                                    time += Config.Sample_delay;
+                                    Write_Textbox("Kalibracja");
                                 }
                             }
-                            else
-                            {
-                                Write_Textbox("Kalibracja");
-                            }
+                        }else
+                        {
+                            ppm = Random_number();
+                            _chartslive.Read(ppm);
+                            dgv.Rows.Add(time, ppm);
+                            Write_Textbox(ppm.ToString());
+                            time += Config.Sample_delay;
+                            Thread.Sleep(Config.Sample_delay);
                         }
+                       
                     }
                     catch (ThreadAbortException tae)
                     {
